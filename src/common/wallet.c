@@ -446,83 +446,101 @@ static int parse_script(buffer_t *in_buf,
                         buffer_t *out_buf,
                         size_t depth,
                         unsigned int context_flags) {
-    // look ahead to finds out if the buffer starts with alphanumeric digits that could be wrappers,
-    // followed by a colon
     int n_wrappers = 0;
-    char c;
-    bool can_read;
-    while (true) {
-        can_read = buffer_peek_n(in_buf, n_wrappers, (uint8_t *) &c);
-        if (can_read && 'a' <= c && c <= 'z' && is_valid_miniscript_wrapper[c - 'a']) {
-            ++n_wrappers;
-        } else {
-            break;
-        }
-    }
 
     policy_node_t *outermost_node = (policy_node_t *) buffer_get_cur(out_buf);
-
     policy_node_with_script_t *inner_wrapper = NULL;  // pointer to the inner wrapper, if any
 
-    if (can_read && c == ':') {
-        // parse wrappers
-        for (int i = 0; i < n_wrappers; i++) {
-            policy_node_with_script_t *node =
-                (policy_node_with_script_t *) buffer_alloc(out_buf,
-                                                           sizeof(policy_node_with_script_t),
-                                                           true);
-            if (node == NULL) {
-                return WITH_ERROR(-1, "Out of memory");
+    // miniscript-related parsing only within WSH
+    if (context_flags & CONTEXT_WITHIN_WSH) {
+        // look ahead to finds out if the buffer starts with alphanumeric digits that could be
+        // wrappers, followed by a colon
+        char c;
+        bool can_read;
+        while (true) {
+            can_read = buffer_peek_n(in_buf, n_wrappers, (uint8_t *) &c);
+            if (can_read && 'a' <= c && c <= 'z' && is_valid_miniscript_wrapper[c - 'a']) {
+                ++n_wrappers;
+            } else {
+                break;
             }
-            buffer_read_u8(in_buf, (uint8_t *) &c);
-            switch (c) {
-                case 'a':
-                    node->base.type = TOKEN_A;
-                    break;
-                case 's':
-                    node->base.type = TOKEN_S;
-                    break;
-                case 'c':
-                    node->base.type = TOKEN_C;
-                    break;
-                case 't':
-                    node->base.type = TOKEN_T;
-                    break;
-                case 'd':
-                    node->base.type = TOKEN_D;
-                    break;
-                case 'v':
-                    node->base.type = TOKEN_V;
-                    break;
-                case 'j':
-                    node->base.type = TOKEN_J;
-                    break;
-                case 'n':
-                    node->base.type = TOKEN_N;
-                    break;
-                case 'l':
-                    node->base.type = TOKEN_L;
-                    break;
-                case 'u':
-                    node->base.type = TOKEN_U;
-                    break;
-                default:
-                    PRINTF("Unexpected wrapper: %c\n", c);
-                    return -1;
-            }
-
-            if (inner_wrapper != NULL) {
-                inner_wrapper->script = (policy_node_t *) node;
-            }
-            inner_wrapper = node;
         }
-        buffer_seek_cur(in_buf, 1);  // skip ":"
-    } else {
-        n_wrappers = 0;  // it was not a wrapper
+
+        if (can_read && c == ':') {
+            // parse wrappers
+            for (int i = 0; i < n_wrappers; i++) {
+                policy_node_with_script_t *node =
+                    (policy_node_with_script_t *) buffer_alloc(out_buf,
+                                                               sizeof(policy_node_with_script_t),
+                                                               true);
+                if (node == NULL) {
+                    return WITH_ERROR(-1, "Out of memory");
+                }
+                buffer_read_u8(in_buf, (uint8_t *) &c);
+                switch (c) {
+                    case 'a':
+                        node->base.type = TOKEN_A;
+                        break;
+                    case 's':
+                        node->base.type = TOKEN_S;
+                        break;
+                    case 'c':
+                        node->base.type = TOKEN_C;
+                        break;
+                    case 't':
+                        node->base.type = TOKEN_T;
+                        break;
+                    case 'd':
+                        node->base.type = TOKEN_D;
+                        break;
+                    case 'v':
+                        node->base.type = TOKEN_V;
+                        break;
+                    case 'j':
+                        node->base.type = TOKEN_J;
+                        break;
+                    case 'n':
+                        node->base.type = TOKEN_N;
+                        break;
+                    case 'l':
+                        node->base.type = TOKEN_L;
+                        break;
+                    case 'u':
+                        node->base.type = TOKEN_U;
+                        break;
+                    default:
+                        PRINTF("Unexpected wrapper: %c\n", c);
+                        return -1;
+                }
+
+                if (inner_wrapper != NULL) {
+                    inner_wrapper->script = (policy_node_t *) node;
+                }
+                inner_wrapper = node;
+            }
+            buffer_seek_cur(in_buf, 1);  // skip ":"
+        } else {
+            n_wrappers = 0;  // it was not a wrapper
+        }
     }
 
     // We read the token, we'll do different parsing based on what token we find
     PolicyNodeType token = parse_token(in_buf);
+
+    if (context_flags & CONTEXT_WITHIN_SH) {
+        // whitelist of allowed tokens within sh; in particular, no miniscript
+        switch (token) {
+            case TOKEN_PK:
+            case TOKEN_PKH:
+            case TOKEN_MULTI:
+            case TOKEN_SORTEDMULTI:
+            case TOKEN_WPKH:
+            case TOKEN_WSH:
+                break;
+            default:
+                return WITH_ERROR(-1, "Token not allowed within sh");
+        }
+    }
 
     // all tokens but '0' and '1' have opening and closing parentheses
     bool has_parentheses = token != TOKEN_0 && token != TOKEN_1;
@@ -1336,6 +1354,7 @@ static int parse_script(buffer_t *in_buf,
 
             node->n = 0;
             while (true) {
+                uint8_t c;
                 // If the next character is a ')', we exit and leave it in the buffer
                 if (buffer_peek(in_buf, (uint8_t *) &c) && c == ')') {
                     break;
