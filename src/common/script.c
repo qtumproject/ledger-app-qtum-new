@@ -182,3 +182,161 @@ int format_opscript_script(const uint8_t script[],
     out[out_ctr++] = '\0';
     return out_ctr;
 }
+
+bool get_script_op(uint8_t ** pc, const uint8_t * end, uint8_t* opcodeRet, uint8_t **pvchRet, unsigned int *pvchSize)
+{
+    *opcodeRet = OP_INVALIDOPCODE;
+    if (*pc >= end)
+        return 0;
+
+    if(pvchRet)
+        *pvchRet = 0;
+    if(pvchSize)
+        *pvchSize = 0;
+
+    // Read instruction
+    if (end - *pc < 1)
+        return 0;
+    uint8_t opcode = *(*pc)++;
+
+    // Immediate operand
+    if (opcode <= OP_PUSHDATA4)
+    {
+        unsigned int nSize = 0;
+        if (opcode < OP_PUSHDATA1)
+        {
+            nSize = opcode;
+        }
+        else if (opcode == OP_PUSHDATA1)
+        {
+            if (end - *pc < 1)
+                return 0;
+            nSize = *(*pc)++;
+        }
+        else if (opcode == OP_PUSHDATA2)
+        {
+            if (end - *pc < 2)
+                return 0;
+
+            nSize = read_u16_le(*pc, 0);
+            *pc += 2;
+        }
+        else if (opcode == OP_PUSHDATA4)
+        {
+            if (end - *pc < 4)
+                return 0;
+            nSize = read_u32_le(*pc, 0);
+            *pc += 4;
+        }
+        if (end - *pc < 0 || (unsigned int)(end - *pc) < nSize)
+            return 0;
+        if(pvchRet)
+            *pvchRet = *pc;
+        if(pvchSize)
+            *pvchSize = nSize;
+        *pc += nSize;
+    }
+
+    *opcodeRet = opcode;
+    return 1;
+}
+
+bool get_script_size(uint8_t *buffer, size_t maxSize, unsigned int *scriptSize, unsigned int *discardSize) 
+{
+    *scriptSize = 0;
+    *discardSize = 0;
+    if (maxSize > 0 && buffer[0] < 0xFD) {
+        *scriptSize = buffer[0];
+        *discardSize = 1;
+    } else if (maxSize > 2 && buffer[0] == 0xFD) {
+        *scriptSize = read_u16_le(buffer + 1, 0);
+        *discardSize = 3;
+    } else {
+        return 0;
+    }
+
+    size_t bifferSize = *scriptSize + *discardSize;
+    if(bifferSize <= maxSize) {
+        return 1;
+    }
+
+    return 0;
+}
+
+// Have script size inside the script
+#define HAVE_SCRIPT_SIZE 0
+
+int find_script_op(uint8_t *buffer, size_t size, uint8_t op, bool haveSize)
+{
+    int nFound = 0;
+    unsigned int scriptSize = size;
+    unsigned int discardSize = 0;
+    if(haveSize)
+        get_script_size(buffer, size, &scriptSize, &discardSize);
+    uint8_t opcode = OP_INVALIDOPCODE;
+    const uint8_t* end = buffer + scriptSize + discardSize;
+    uint8_t *begin = buffer + discardSize;
+    for (uint8_t * pc = begin; pc != end && get_script_op(&pc, end, &opcode, 0, 0);)
+        if (opcode == op)
+            ++nFound;
+    return nFound;
+}
+
+bool find_script_data(uint8_t *buffer, size_t size, int index, bool haveSize,  uint8_t **pvchRet, unsigned int *pvchSize)
+{
+    unsigned int scriptSize = size;
+    unsigned int discardSize = 0;
+    if(haveSize)
+        get_script_size(buffer, size, &scriptSize, &discardSize);
+    uint8_t opcode = OP_INVALIDOPCODE;
+    const uint8_t* end = buffer + scriptSize + discardSize;
+    uint8_t *begin = buffer + discardSize;
+    int i = 0;
+    for (uint8_t * pc = begin; i < index && pc != end && get_script_op(&pc, end, &opcode, pvchRet, pvchSize); i++);
+    return i == index;
+}
+
+void get_script_p2pkh(const uint8_t *pkh, uint8_t *script, uint8_t haveSize)
+{
+    uint8_t offset = haveSize ? 1 : 0;
+    if(haveSize) script[0] = 0x19;
+    script[0 + offset] = OP_DUP;
+    script[1 + offset] = OP_HASH160;
+    script[2 + offset] = 0x14;
+    memcpy(script + 3 + offset, pkh, 20);
+    script[23 + offset] = OP_EQUALVERIFY;
+    script[24 + offset] = OP_CHECKSIG;
+}
+
+bool is_opcontract(uint8_t script[], size_t script_len, uint8_t value) {
+    return (!is_p2wpkh(script, script_len) &&
+            !is_p2wsh(script, script_len) &&
+            !is_opreturn(script, script_len) &&
+            find_script_op(script, script_len, value, HAVE_SCRIPT_SIZE) == 1);
+}
+
+bool is_opcreate(uint8_t script[], size_t script_len) {
+    return is_opcontract(script, script_len, OP_CREATE);
+}
+
+bool is_opcall(uint8_t script[], size_t script_len) {
+    return is_opcontract(script, script_len, OP_CALL);
+}
+
+bool is_opsender(uint8_t script[], size_t script_len) {
+    return is_opcontract(script, script_len, OP_SENDER);
+}
+
+bool get_script_sender_address(uint8_t *buffer, size_t size, uint8_t *script) {
+    uint8_t *pkh = 0;
+    unsigned int pkhSize = 0;
+    bool ret = find_script_data(buffer, size, 2, HAVE_SCRIPT_SIZE, &pkh, &pkhSize) == 1 && pkh != 0 && pkhSize == 20;
+    if(ret) get_script_p2pkh(pkh, script, HAVE_SCRIPT_SIZE);
+    return ret;
+}
+
+bool get_sender_sig(uint8_t *buffer, size_t size, uint8_t **sig, unsigned int *sigSize) {
+    if(sig == 0 || sigSize == 0)
+        return 0;
+    return find_script_data(buffer, size, 3, HAVE_SCRIPT_SIZE, sig, sigSize) && *sig != 0 && *sigSize > 0;
+}

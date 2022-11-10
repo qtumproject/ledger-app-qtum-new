@@ -142,6 +142,12 @@ enum opcodetype {
     // Opcode added by BIP 342 (Tapscript)
     OP_CHECKSIGADD = 0xba,
 
+    // Execute EXT byte code.
+    OP_CREATE = 0xc1,
+    OP_CALL = 0xc2,
+    OP_SPEND = 0xc3,
+    OP_SENDER = 0xc4,
+
     OP_INVALIDOPCODE = 0xff,
 };
 
@@ -165,6 +171,12 @@ static inline bool is_p2wsh(const uint8_t script[], size_t script_len) {
 static inline bool is_opreturn(const uint8_t script[], size_t script_len) {
     return script_len > 0 && script_len <= 83 && script[0] == OP_RETURN;
 }
+
+bool is_opcreate(uint8_t script[], size_t script_len);
+
+bool is_opcall(uint8_t script[], size_t script_len);
+
+bool is_opsender(uint8_t script[], size_t script_len);
 
 /**
  * Returns the size in bytes of the minimal push opcode for <n>, where n a uint32_t.
@@ -223,3 +235,7 @@ int get_script_address(const uint8_t script[], size_t script_len, char *out, siz
 int format_opscript_script(const uint8_t script[],
                            size_t script_len,
                            char out[static MAX_OPRETURN_OUTPUT_DESC_SIZE]);
+
+bool get_script_size(uint8_t *buffer, size_t maxSize, unsigned int *scriptSize, unsigned int *discardSize);
+bool get_script_sender_address(uint8_t *buffer, size_t size, uint8_t *script);
+bool get_sender_sig(uint8_t *buffer, size_t size, uint8_t **sig, unsigned int *sigSize);
