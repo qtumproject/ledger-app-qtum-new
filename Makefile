@@ -36,15 +36,15 @@ APP_STACK_SIZE = 3072
 
 # simplify for tests
 ifndef COIN
-COIN=bitcoin_testnet
+COIN=qtum_testnet
 endif
 
 # Flags: BOLOS_SETTINGS, GLOBAL_PIN, DERIVE_MASTER
 APP_LOAD_FLAGS=--appFlags 0xa50
 
-ifeq ($(COIN),bitcoin_testnet)
+ifeq ($(COIN),qtum_testnet)
 
-# Bitcoin testnet, no legacy support
+# Qtum testnet, no legacy support
 DEFINES   += BIP32_PUBKEY_VERSION=0x043587CF
 DEFINES   += BIP44_COIN_TYPE=1
 DEFINES   += BIP44_COIN_TYPE_2=1
@@ -53,11 +53,11 @@ DEFINES   += COIN_P2SH_VERSION=110
 DEFINES   += COIN_NATIVE_SEGWIT_PREFIX=\"tq\"
 DEFINES   += COIN_COINID_SHORT=\"TEST\"
 
-APPNAME = "Bitcoin Test"
+APPNAME = "Qtum Test"
 
-else ifeq ($(COIN),bitcoin)
+else ifeq ($(COIN),qtum)
 
-# Bitcoin mainnet, no legacy support
+# Qtum mainnet, no legacy support
 DEFINES   += BIP32_PUBKEY_VERSION=0x0488B21E
 DEFINES   += BIP44_COIN_TYPE=0
 DEFINES   += BIP44_COIN_TYPE_2=0
@@ -66,11 +66,11 @@ DEFINES   += COIN_P2SH_VERSION=50
 DEFINES   += COIN_NATIVE_SEGWIT_PREFIX=\"qc\"
 DEFINES   += COIN_COINID_SHORT=\"QTUM\"
 
-APPNAME = "Bitcoin"
+APPNAME = "Qtum"
 
 else
 ifeq ($(filter clean,$(MAKECMDGOALS)),)
-$(error Unsupported COIN - use bitcoin_testnet, bitcoin)
+$(error Unsupported COIN - use qtum_testnet, qtum)
 endif
 endif
 
@@ -199,7 +199,7 @@ dep/%.d: %.c Makefile
 
 
 listvariants:
-	@echo VARIANTS COIN bitcoin_testnet bitcoin
+	@echo VARIANTS COIN qtum_testnet qtum
 
 
 # Makes a detailed report of code and data size in debug/size-report.txt
