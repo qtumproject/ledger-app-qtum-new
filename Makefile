@@ -36,41 +36,43 @@ APP_STACK_SIZE = 3072
 
 # simplify for tests
 ifndef COIN
-COIN=bitcoin_testnet
+COIN=qtum_testnet
 endif
 
 # Flags: BOLOS_SETTINGS, GLOBAL_PIN, DERIVE_MASTER
 APP_LOAD_FLAGS=--appFlags 0xa50
 
-ifeq ($(COIN),bitcoin_testnet)
+ifeq ($(COIN),qtum_testnet)
 
-# Bitcoin testnet, no legacy support
+# Qtum testnet, no legacy support
 DEFINES   += BIP32_PUBKEY_VERSION=0x043587CF
 DEFINES   += BIP44_COIN_TYPE=1
 DEFINES   += BIP44_COIN_TYPE_2=1
-DEFINES   += COIN_P2PKH_VERSION=111
-DEFINES   += COIN_P2SH_VERSION=196
-DEFINES   += COIN_NATIVE_SEGWIT_PREFIX=\"tb\"
+DEFINES   += COIN_P2PKH_VERSION=120
+DEFINES   += COIN_P2SH_VERSION=110
+DEFINES   += COIN_NATIVE_SEGWIT_PREFIX=\"tq\"
 DEFINES   += COIN_COINID_SHORT=\"TEST\"
 
-APPNAME = "Bitcoin Test"
+APPNAME = "Qtum Test"
+APP_LOAD_PARAMS += --path $(APP_PATH) --path "44'/1'" --path "45'/1'" --path "48'/1'" --path "49'/1'" --path "84'/1'" --path "0'/45342'" --path "20698'/3053'/12648430'"
 
-else ifeq ($(COIN),bitcoin)
+else ifeq ($(COIN),qtum)
 
-# Bitcoin mainnet, no legacy support
+# Qtum mainnet, no legacy support
 DEFINES   += BIP32_PUBKEY_VERSION=0x0488B21E
 DEFINES   += BIP44_COIN_TYPE=0
 DEFINES   += BIP44_COIN_TYPE_2=0
-DEFINES   += COIN_P2PKH_VERSION=0
-DEFINES   += COIN_P2SH_VERSION=5
-DEFINES   += COIN_NATIVE_SEGWIT_PREFIX=\"bc\"
-DEFINES   += COIN_COINID_SHORT=\"BTC\"
+DEFINES   += COIN_P2PKH_VERSION=58
+DEFINES   += COIN_P2SH_VERSION=50
+DEFINES   += COIN_NATIVE_SEGWIT_PREFIX=\"qc\"
+DEFINES   += COIN_COINID_SHORT=\"QTUM\"
 
-APPNAME = "Bitcoin"
+APPNAME = "Qtum"
+APP_LOAD_PARAMS += --path $(APP_PATH) --path "44'/88'" --path "45'/88'" --path "48'/88'" --path "49'/88'" --path "84'/88'"  --path "0'/45342'" --path "20698'/3053'/12648430'"
 
 else
 ifeq ($(filter clean,$(MAKECMDGOALS)),)
-$(error Unsupported COIN - use bitcoin_testnet, bitcoin)
+$(error Unsupported COIN - use qtum_testnet, qtum)
 endif
 endif
 
@@ -199,7 +201,7 @@ dep/%.d: %.c Makefile
 
 
 listvariants:
-	@echo VARIANTS COIN bitcoin_testnet bitcoin
+	@echo VARIANTS COIN qtum_testnet qtum
 
 
 # Makes a detailed report of code and data size in debug/size-report.txt
