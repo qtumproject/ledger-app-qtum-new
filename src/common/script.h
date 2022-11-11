@@ -157,7 +157,11 @@ typedef enum {
     SCRIPT_TYPE_P2WPKH = 0x02,
     SCRIPT_TYPE_P2WSH = 0x03,
     SCRIPT_TYPE_P2TR = 0x04,
-    SCRIPT_TYPE_UNKNOWN_SEGWIT = 0xFF  // a valid but undefined segwit script
+    SCRIPT_TYPE_UNKNOWN_SEGWIT = 0xFF,  // a valid but undefined segwit script
+    SCRIPT_TYPE_CREATE_SENDER,
+    SCRIPT_TYPE_CALL_SENDER,
+    SCRIPT_TYPE_CREATE,
+    SCRIPT_TYPE_CALL,
 } script_type_e;
 
 static inline bool is_p2wpkh(const uint8_t script[], size_t script_len) {
@@ -172,11 +176,11 @@ static inline bool is_opreturn(const uint8_t script[], size_t script_len) {
     return script_len > 0 && script_len <= 83 && script[0] == OP_RETURN;
 }
 
-bool is_opcreate(uint8_t script[], size_t script_len);
+bool is_opcreate(const uint8_t script[], size_t script_len);
 
-bool is_opcall(uint8_t script[], size_t script_len);
+bool is_opcall(const uint8_t script[], size_t script_len);
 
-bool is_opsender(uint8_t script[], size_t script_len);
+bool is_opsender(const uint8_t script[], size_t script_len);
 
 /**
  * Returns the size in bytes of the minimal push opcode for <n>, where n a uint32_t.
@@ -239,3 +243,4 @@ int format_opscript_script(const uint8_t script[],
 bool get_script_size(uint8_t *buffer, size_t maxSize, unsigned int *scriptSize, unsigned int *discardSize);
 bool get_script_sender_address(uint8_t *buffer, size_t size, uint8_t *script);
 bool get_sender_sig(uint8_t *buffer, size_t size, uint8_t **sig, unsigned int *sigSize);
+bool opcall_addr_encode(const uint8_t script[], size_t script_len, char *out, size_t out_len, bool isOpSender);
