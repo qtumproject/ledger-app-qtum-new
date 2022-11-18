@@ -70,10 +70,30 @@ typedef struct {
 
     uint8_t scriptPubKey[MAX_OUTPUT_SCRIPTPUBKEY_LEN];
     size_t scriptPubKey_len;
-} in_out_info_t;
+} out_info_t;
 
 typedef struct {
-    in_out_info_t in_out;
+    merkleized_map_commitment_t map;
+
+    bool unexpected_pubkey_error;  // Set to true if the pubkey in the keydata of
+                                   // PSBT_{IN,OUT}_BIP32_DERIVATION or
+                                   // PSBT_{IN,OUT}_TAP_BIP32_DERIVATION is not the correct length.
+
+    bool placeholder_found;  // Set to true if a matching placeholder is found in the input info
+
+    bool is_change;
+    int address_index;
+
+    // For an output, its scriptPubKey
+    // for an input, the prevout's scriptPubKey (either from the non-witness-utxo, or from the
+    // witness-utxo)
+
+    uint8_t scriptPubKey[MAX_INPUT_SCRIPTPUBKEY_LEN];
+    size_t scriptPubKey_len;
+} in_info_t;
+
+typedef struct {
+    in_info_t in_out;
     bool has_witnessUtxo;
     bool has_nonWitnessUtxo;
     bool has_redeemScript;
@@ -89,7 +109,7 @@ typedef struct {
 } input_info_t;
 
 typedef struct {
-    in_out_info_t in_out;
+    out_info_t in_out;
     uint64_t value;
 } output_info_t;
 
@@ -369,10 +389,113 @@ static int get_amount_scriptpubkey_from_psbt(
 
 // Convenience function to share common logic when processing all the
 // PSBT_{IN|OUT}_{TAP}?_BIP32_DERIVATION fields.
-int read_change_and_index_from_psbt_bip32_derivation(
+int read_change_and_index_from_psbt_bip32_derivation_in(
     dispatcher_context_t *dc,
     placeholder_info_t *placeholder_info,
-    in_out_info_t *in_out,
+    in_info_t *in_out,
+    int psbt_key_type,
+    buffer_t *data,
+    bool is_output,
+    const merkleized_map_commitment_t *map_commitment,
+    int index) {
+    int psbt_key_type_taproot;  // segwitv1 (taproot) keys are 32-byte x-only keys
+    if (is_output) {
+        psbt_key_type_taproot = PSBT_OUT_TAP_BIP32_DERIVATION;
+    } else {
+        psbt_key_type_taproot = PSBT_IN_TAP_BIP32_DERIVATION;
+    }
+
+    // x-only pubkeys for taproot, normal compressed pubkeys otherwise
+    size_t key_len = (psbt_key_type == psbt_key_type_taproot ? 32 : 33);
+
+    uint8_t bip32_derivation_pubkey[33];
+    if (!buffer_read_bytes(data,
+                           bip32_derivation_pubkey,
+                           key_len)  // read compressed pubkey or x-only pubkey
+        || buffer_can_read(data, 1)  // ...but should not be able to read more
+    ) {
+        PRINTF("Unexpected pubkey length\n");
+        in_out->unexpected_pubkey_error = true;
+        return -1;
+    }
+
+    // get the corresponding value in the values Merkle tree (note: it doesn't work for
+    // taproot scripts)
+    uint8_t hasheslen_fpt_der[1 + 4 + 4 * MAX_BIP32_PATH_STEPS];
+    int len = call_get_merkle_leaf_element(dc,
+                                           map_commitment->values_root,
+                                           (uint32_t) map_commitment->size,
+                                           index,
+                                           hasheslen_fpt_der,
+                                           sizeof(hasheslen_fpt_der));
+    int prefix_len = (psbt_key_type == psbt_key_type_taproot) ? 1 : 0;
+
+    // length sanity checks: at least 4 bytes for the fingerprint, and two derivation steps
+    if (len < prefix_len + 4 + 2 * 4 || (len - prefix_len) % 4 != 0) {
+        PRINTF("Invalid length of _BIP32_DERIVATION value: %d\n", len);
+        return -1;
+    }
+
+    // for PSBT_{IN,OUT}_TAP_BIP32_DERIVATION, there is a 1 byte 0x00 prefix
+    // anything with a different initial byte is a possible script path spend,
+    // which is not yet supported
+    if (psbt_key_type == psbt_key_type_taproot && hasheslen_fpt_der[0] != 0) {
+        PRINTF("PSBT_{IN,OUT}_TAP_BIP32_DERIVATION must have a 0-length list of hashes");
+        return -1;
+    }
+
+    int der_len = (len - prefix_len - 4) / 4;
+
+    // if this derivation path matches the internal placeholder,
+    // we use it to detect whether the current input is change or not,
+    // and store its address index
+    uint32_t fpr = read_u32_be(hasheslen_fpt_der, prefix_len);
+
+    if (fpr == placeholder_info->fingerprint &&
+        der_len == placeholder_info->key_derivation_length + 2) {
+        const uint8_t *derivation_path = hasheslen_fpt_der + prefix_len + 4;
+        for (int i = 0; i < placeholder_info->key_derivation_length; i++) {
+            uint32_t der_step = read_u32_le(derivation_path, 4 * i);
+
+            if (placeholder_info->key_derivation[i] != der_step) {
+                return 0;
+            }
+        }
+
+        uint32_t change = read_u32_le(derivation_path, 4 * (der_len - 2));
+        uint32_t addr_index = read_u32_le(derivation_path, 4 * (der_len - 1));
+
+        // check that we can indeed derive the same key from the current placeholder
+        serialized_extended_pubkey_t pubkey;
+        if (0 > bip32_CKDpub(&placeholder_info->pubkey, change, &pubkey)) return -1;
+        if (0 > bip32_CKDpub(&pubkey, addr_index, &pubkey)) return -1;
+
+        int pk_offset = (key_len == 33 ? 0 : 1);  // skip the first byte if x-only pubkey
+        if (memcmp(pubkey.compressed_pubkey + pk_offset, bip32_derivation_pubkey, key_len) != 0) {
+            return 0;
+        }
+
+        // check if the 'change' derivation step is indeed coherent with placeholder
+        if (change == placeholder_info->placeholder.num_first) {
+            in_out->is_change = false;
+            in_out->address_index = addr_index;
+        } else if (change == placeholder_info->placeholder.num_second) {
+            in_out->is_change = true;
+            in_out->address_index = addr_index;
+        } else {
+            return 0;
+        }
+
+        in_out->placeholder_found = true;
+        return 1;
+    }
+    return 0;
+}
+
+int read_change_and_index_from_psbt_bip32_derivation_out(
+    dispatcher_context_t *dc,
+    placeholder_info_t *placeholder_info,
+    out_info_t *in_out,
     int psbt_key_type,
     buffer_t *data,
     bool is_output,
@@ -479,9 +602,35 @@ int read_change_and_index_from_psbt_bip32_derivation(
  *
  * @return 1 if the given input/output is internal; 0 if external; -1 on error.
  */
-static int is_in_out_internal(dispatcher_context_t *dispatcher_context,
+static int is_in_out_internal_in(dispatcher_context_t *dispatcher_context,
                               const sign_psbt_state_t *state,
-                              const in_out_info_t *in_out_info,
+                              const in_info_t *in_out_info,
+                              bool is_input) {
+    // If we did not find any info about the pubkey associated to the placeholder we're considering,
+    // then it's external
+    if (!in_out_info->placeholder_found) {
+        return 0;
+    }
+
+    if (!is_input && in_out_info->is_change != 1) {
+        // unlike for inputs, we only consider outputs internal if they are on the change path
+        return 0;
+    }
+
+    return compare_wallet_script_at_path(dispatcher_context,
+                                         in_out_info->is_change,
+                                         in_out_info->address_index,
+                                         &state->wallet_policy_map,
+                                         state->wallet_header_version,
+                                         state->wallet_header_keys_info_merkle_root,
+                                         state->wallet_header_n_keys,
+                                         in_out_info->scriptPubKey,
+                                         in_out_info->scriptPubKey_len);
+}
+
+static int is_in_out_internal_out(dispatcher_context_t *dispatcher_context,
+                              const sign_psbt_state_t *state,
+                              const out_info_t *in_out_info,
                               bool is_input) {
     // If we did not find any info about the pubkey associated to the placeholder we're considering,
     // then it's external
@@ -853,7 +1002,7 @@ static void input_keys_callback(dispatcher_context_t *dc,
                     key_type == PSBT_IN_TAP_BIP32_DERIVATION) &&
                    !callback_data->input->in_out.placeholder_found) {
             if (0 >
-                read_change_and_index_from_psbt_bip32_derivation(dc,
+                read_change_and_index_from_psbt_bip32_derivation_in(dc,
                                                                  callback_data->placeholder_info,
                                                                  &callback_data->input->in_out,
                                                                  key_type,
@@ -982,7 +1131,7 @@ preprocess_inputs(dispatcher_context_t *dc,
 
         // check if the input is internal; if not, continue
 
-        int is_internal = is_in_out_internal(dc, st, &input.in_out, true);
+        int is_internal = is_in_out_internal_in(dc, st, &input.in_out, true);
         if (is_internal < 0) {
             PRINTF("Error checking if input %d is internal\n", cur_input_index);
             SEND_SW(dc, SW_INCORRECT_DATA);
@@ -1141,7 +1290,7 @@ static void output_keys_callback(dispatcher_context_t *dc,
         if ((key_type == PSBT_OUT_BIP32_DERIVATION || key_type == PSBT_OUT_TAP_BIP32_DERIVATION) &&
             !callback_data->output->in_out.placeholder_found) {
             if (0 >
-                read_change_and_index_from_psbt_bip32_derivation(dc,
+                read_change_and_index_from_psbt_bip32_derivation_out(dc,
                                                                  callback_data->placeholder_info,
                                                                  &callback_data->output->in_out,
                                                                  key_type,
@@ -1228,7 +1377,7 @@ process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st) {
 
         output.in_out.scriptPubKey_len = result_len;
 
-        int is_internal = is_in_out_internal(dc, st, &output.in_out, false);
+        int is_internal = is_in_out_internal_out(dc, st, &output.in_out, false);
 
         if (is_internal < 0) {
             PRINTF("Error checking if output %d is internal\n", cur_output_index);

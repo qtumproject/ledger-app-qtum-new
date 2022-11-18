@@ -24,7 +24,8 @@
 /**
  * Maximum scriptPubKey length for an output that we can recognize.
  */
-#define MAX_OUTPUT_SCRIPTPUBKEY_LEN 500  // max 500 for contracts; other scripts are shorter
+#define MAX_OUTPUT_SCRIPTPUBKEY_LEN 450  // max 450 for contracts; other scripts are shorter
+#define MAX_INPUT_SCRIPTPUBKEY_LEN 83  // max 83 for OP_RETURN; other scripts are shorter
 
 /**
  * Maximum length of a wallet registered into the device (characters), excluding terminating NULL.
