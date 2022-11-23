@@ -2506,3 +2506,96 @@ void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
 
     SEND_SW(dc, SW_OK);
 }
+
+bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_t tx_version_len, uint8_t* sha_prevouts, uint8_t sha_prevouts_len, uint8_t* sha_sequence, uint8_t sha_sequence_len, uint8_t* sender_script, size_t sender_script_len, uint8_t* output_value, uint8_t output_value_len)
+{
+    cx_sha256_init(sighash_context);
+
+    // Use cache data generated from Segwit
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", tx_version_len, tx_version);
+    cx_hash(
+        &sighash_context->header, 0,
+        tx_version,
+        tx_version_len,
+        NULL, 0);
+
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_prevouts_len, sha_prevouts);
+    cx_hash(
+        &sighash_context->header, 0,
+        sha_prevouts,
+        sha_prevouts_len,
+        NULL, 0);
+
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_sequence_len, sha_sequence);
+    cx_hash(
+        &sighash_context->header, 0,
+        sha_sequence,
+        sha_sequence_len,
+        NULL, 0);
+
+    // Op sender specific data
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sender_script_len, sender_script);
+    cx_hash(
+        &sighash_context->header, 0,
+        output_value,
+        output_value_len,
+        NULL, 0);
+
+    uint8_t output_script_size[3];
+    size_t output_script_size_len = 1;
+    if(sender_script_len < 0xFD)
+    {
+        output_script_size[0] = sender_script_len;
+    }
+    else
+    {
+        output_script_size[0] = 0xFD;
+        output_script_size_len = 3;
+        write_u16_le(output_script_size, 1, sender_script_len);
+    }
+
+    cx_hash(
+        &sighash_context->header, 0,
+        output_script_size,
+        output_script_size_len,
+        NULL, 0);
+
+    cx_hash(
+        &sighash_context->header, 0,
+        sender_script,
+        sender_script_len,
+        NULL, 0);
+
+    uint8_t script_code[26];
+    if(!get_script_sender_address(sender_script, sender_script_len, script_code))
+        return 0;
+
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sizeof(script_code), script_code);
+    cx_hash(
+        &sighash_context->header, 0,
+        script_code,
+        sizeof(script_code),
+        NULL, 0);
+
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", output_value_len, output_value);
+    cx_hash(
+        &sighash_context->header, 0,
+        output_value,
+        output_value_len,
+        NULL, 0);
+
+    return 1;
+}
+
+void hash_sender_finalize(cx_sha256_t* sighash_context, uint8_t* data_buffer, uint8_t data_buffer_len, uint8_t* sha_outputs, uint8_t sha_outputs_len)
+{
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_outputs_len, sha_outputs);
+    cx_hash(
+        &sighash_context->header, 0,
+        sha_outputs,
+        sha_outputs_len,
+        NULL, 0);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", data_buffer_len, data_buffer);
+    cx_hash(&sighash_context->header, 0,
+        data_buffer, data_buffer_len, NULL, 0);
+}
