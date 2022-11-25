@@ -267,6 +267,11 @@ UX_STEP_CB(ux_accept_and_send_step,
            set_ux_flow_response(true),
            {&C_icon_validate_14, "Accept", "and send"});
 
+UX_STEP_CB(ux_sign_sender_step,
+           pbb,
+           set_ux_flow_response(true),
+           {&C_icon_validate_14, "Sign", "OP_SENDER"});
+
 // Step with wallet icon and "Register wallet"
 UX_STEP_NOCB(ux_display_register_wallet_step,
              pb,
@@ -513,6 +518,17 @@ UX_FLOW(ux_accept_transaction_flow,
         &ux_confirm_transaction_step,
         &ux_confirm_transaction_fees_step,
         &ux_accept_and_send_step,
+        &ux_display_reject_step);
+
+// Finalize see the transaction fees and finally sign sender
+// #1 screen: eye icon + "Confirm Transaction"
+// #2 screen: fee amount
+// #3 screen: "Sign OP_SENDER", with approve button
+// #4 screen: reject button
+UX_FLOW(ux_sign_sender_transaction_flow,
+        &ux_confirm_transaction_step,
+        &ux_confirm_transaction_fees_step,
+        &ux_sign_sender_step,
         &ux_display_reject_step);
 
 // Process UI events until the current flow terminates; does not handle any APDU exchange
