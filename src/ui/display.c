@@ -693,12 +693,19 @@ bool ui_validate_output(dispatcher_context_t *context,
     return io_ui_process(context);
 }
 
-bool ui_validate_transaction(dispatcher_context_t *context, const char *coin_name, uint64_t fee) {
+bool ui_validate_transaction(dispatcher_context_t *context, const char *coin_name, uint64_t fee, bool sign_sender) {
     ui_validate_transaction_state_t *state = (ui_validate_transaction_state_t *) &g_ui_state;
 
     format_sats_amount(coin_name, fee, state->fee);
 
-    ux_flow_init(0, ux_accept_transaction_flow, NULL);
+    if(sign_sender)
+    {
+        ux_flow_init(0, ux_sign_sender_transaction_flow, NULL);
+    }
+    else
+    {
+        ux_flow_init(0, ux_accept_transaction_flow, NULL);
+    }
 
     return io_ui_process(context);
 }

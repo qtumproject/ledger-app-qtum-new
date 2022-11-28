@@ -51,6 +51,8 @@
 
 #include "../swap/swap_globals.h"
 
+#define P2_NEW_SENDER 0x81
+
 // common info that applies to either the current input or the current output
 typedef struct {
     merkleized_map_commitment_t map;
@@ -1490,7 +1492,8 @@ confirm_transaction(dispatcher_context_t *dc, sign_psbt_state_t *st) {
         }
     } else {
         // Show final user validation UI
-        if (!ui_validate_transaction(dc, COIN_COINID_SHORT, fee)) {
+        bool sign_sender = st->p2 == P2_NEW_SENDER;
+        if (!ui_validate_transaction(dc, COIN_COINID_SHORT, fee, sign_sender)) {
             SEND_SW(dc, SW_DENY);
             return false;
         };

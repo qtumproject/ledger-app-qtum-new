@@ -60,4 +60,4 @@ bool ui_validate_output(dispatcher_context_t *context,
                         const char *coin_name,
                         uint64_t amount);
 
-bool ui_validate_transaction(dispatcher_context_t *context, const char *coin_name, uint64_t fee);
+bool ui_validate_transaction(dispatcher_context_t *context, const char *coin_name, uint64_t fee, bool sign_sender);
