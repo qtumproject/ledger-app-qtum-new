@@ -2510,7 +2510,7 @@ void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
     SEND_SW(dc, SW_OK);
 }
 
-bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_t tx_version_len, uint8_t* sha_prevouts, uint8_t sha_prevouts_len, uint8_t* sha_sequence, uint8_t sha_sequence_len, uint8_t* sender_script, size_t sender_script_len, uint8_t* output_value, uint8_t output_value_len)
+bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_t tx_version_len, uint8_t* sha_prevouts, uint8_t sha_prevouts_len, uint8_t* sha_sequences, uint8_t sha_sequences_len, uint8_t* sender_script, size_t sender_script_len, uint8_t* output_value, uint8_t output_value_len)
 {
     cx_sha256_init(sighash_context);
 
@@ -2529,11 +2529,11 @@ bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_
         sha_prevouts_len,
         NULL, 0);
 
-    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_sequence_len, sha_sequence);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_sequences_len, sha_sequences);
     cx_hash(
         &sighash_context->header, 0,
-        sha_sequence,
-        sha_sequence_len,
+        sha_sequences,
+        sha_sequences_len,
         NULL, 0);
 
     // Op sender specific data
@@ -2601,4 +2601,87 @@ void hash_sender_finalize(cx_sha256_t* sighash_context, uint8_t* data_buffer, ui
     PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", data_buffer_len, data_buffer);
     cx_hash(&sighash_context->header, 0,
         data_buffer, data_buffer_len, NULL, 0);
+}
+
+static bool __attribute__((noinline))
+compute_op_sender_hashes(dispatcher_context_t *dc, sign_psbt_state_t *st, uint8_t* sha_prevouts, uint8_t* sha_sequences, uint8_t* sha_outputs) {
+    if(sha_prevouts && sha_sequences)
+    {
+        // compute sha_prevouts and sha_sequences
+        cx_sha256_t sha_prevouts_context, sha_sequences_context;
+
+        // compute hashPrevouts and hashSequence
+        cx_sha256_init(&sha_prevouts_context);
+        cx_sha256_init(&sha_sequences_context);
+
+        for (unsigned int i = 0; i < st->n_inputs; i++) {
+            // get this input's map
+            merkleized_map_commitment_t ith_map;
+
+            int res = call_get_merkleized_map(dc, st->inputs_root, st->n_inputs, i, &ith_map);
+            if (res < 0) {
+                SEND_SW(dc, SW_INCORRECT_DATA);
+                return false;
+            }
+
+            // get prevout hash and output index for the i-th input
+            uint8_t ith_prevout_hash[32];
+            if (32 != call_get_merkleized_map_value(dc,
+                                                    &ith_map,
+                                                    (uint8_t[]){PSBT_IN_PREVIOUS_TXID},
+                                                    1,
+                                                    ith_prevout_hash,
+                                                    32)) {
+                SEND_SW(dc, SW_INCORRECT_DATA);
+                return false;
+            }
+
+            crypto_hash_update(&sha_prevouts_context.header, ith_prevout_hash, 32);
+
+            uint8_t ith_prevout_n_raw[4];
+            if (4 != call_get_merkleized_map_value(dc,
+                                                   &ith_map,
+                                                   (uint8_t[]){PSBT_IN_OUTPUT_INDEX},
+                                                   1,
+                                                   ith_prevout_n_raw,
+                                                   4)) {
+                SEND_SW(dc, SW_INCORRECT_DATA);
+                return false;
+            }
+
+            crypto_hash_update(&sha_prevouts_context.header, ith_prevout_n_raw, 4);
+
+            uint8_t ith_nSequence_raw[4];
+            if (4 != call_get_merkleized_map_value(dc,
+                                                   &ith_map,
+                                                   (uint8_t[]){PSBT_IN_SEQUENCE},
+                                                   1,
+                                                   ith_nSequence_raw,
+                                                   4)) {
+                // if no PSBT_IN_SEQUENCE is present, we must assume nSequence 0xFFFFFFFF
+                memset(ith_nSequence_raw, 0xFF, 4);
+            }
+
+            crypto_hash_update(&sha_sequences_context.header, ith_nSequence_raw, 4);
+        }
+
+        crypto_hash_digest(&sha_prevouts_context.header, sha_prevouts, 32);
+        crypto_hash_digest(&sha_sequences_context.header, sha_sequences, 32);
+    }
+
+    if(sha_outputs)
+    {
+        // compute sha_outputs
+        cx_sha256_t sha_outputs_context;
+        cx_sha256_init(&sha_outputs_context);
+
+        if (hash_outputs(dc, st, &sha_outputs_context.header) == -1) {
+            SEND_SW(dc, SW_INCORRECT_DATA);
+            return false;
+        }
+
+        crypto_hash_digest(&sha_outputs_context.header, sha_outputs, 32);
+    }
+
+    return true;
 }
