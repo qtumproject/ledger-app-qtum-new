@@ -133,6 +133,12 @@ typedef struct {
 } segwit_hashes_t;
 
 typedef struct {
+    uint8_t sha_prevouts[32];
+    uint8_t sha_sequences[32];
+    uint8_t sha_outputs[32];
+} output_hashes_t;
+
+typedef struct {
     uint32_t master_key_fingerprint;
     uint32_t tx_version;
     uint32_t locktime;
@@ -187,6 +193,10 @@ as all the internal keys will have a path that ends with /change/address_index (
 It would be possible to generalize to more complex scripts, but it makes it more difficult to detect
 the right paths to identify internal inputs/outputs.
 */
+
+bool compute_op_sender_hashes(dispatcher_context_t *dc, sign_psbt_state_t *st, uint8_t* sha_prevouts, uint8_t* sha_sequences, uint8_t* sha_outputs);
+bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_t* sha_prevouts, uint8_t* sha_sequences, uint8_t* sender_script, size_t sender_script_len, uint8_t* output_value);
+void hash_sender_finalize(cx_sha256_t* sighash_context, uint8_t* data_buffer, uint8_t* sha_outputs);
 
 // HELPER FUNCTIONS
 bool is_p2_new_sender(uint8_t p2)
@@ -1310,7 +1320,7 @@ static void output_keys_callback(dispatcher_context_t *dc,
 }
 
 static bool __attribute__((noinline))
-process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st) {
+process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st, output_hashes_t *hashes, uint8_t* hash) {
     /** OUTPUTS VERIFICATION FLOW
      *
      *  For each output, check if it's a change address.
@@ -1325,6 +1335,7 @@ process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st) {
     for (unsigned int cur_output_index = 0; cur_output_index < st->n_outputs; cur_output_index++) {
         output_info_t output;
         memset(&output, 0, sizeof(output));
+        bool isOpSender = false;
 
         output_keys_callback_data_t callback_data = {.output = &output,
                                                      .placeholder_info = &placeholder_info};
@@ -1439,12 +1450,38 @@ process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st) {
                     SEND_SW(dc, SW_DENY);
                     return false;
                 }
+                if(hash)
+                {
+                    isOpSender = is_opsender(output.in_out.scriptPubKey, output.in_out.scriptPubKey_len);
+                }
             }
         } else {
             // valid change address, nothing to show to the user
 
             st->change_outputs_total_value += output.value;
             ++st->change_count;
+        }
+
+        if(isOpSender)
+        {
+            {
+                cx_sha256_t sighash_context;
+
+                uint8_t tx_version[4];
+                write_u32_le(tx_version, 0, st->tx_version);
+                if(!hash_sender_start(&sighash_context, tx_version, hashes->sha_prevouts, hashes->sha_sequences, output.in_out.scriptPubKey,  output.in_out.scriptPubKey_len, raw_result)) 
+                    return false;
+
+                uint8_t data_buffer[8];
+                write_u32_le(data_buffer, 0, st->locktime);
+                write_u32_le(data_buffer, 4, 0x01);
+                hash_sender_finalize(&sighash_context, data_buffer, hashes->sha_outputs);
+
+                cx_hash(&sighash_context.header, CX_LAST, hash, 0, hash, 32);
+            }
+
+            // Rehash
+            cx_hash_sha256(hash, 32, hash, 32);
         }
     }
 
@@ -2485,58 +2522,70 @@ void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
      */
     if (!show_alerts(dc, &st, internal_inputs)) return;
 
-    /** OUTPUTS VERIFICATION FLOW
-     *
-     *  For each output, check if it's a change address.
-     *  Show each output that is not a change address to the user for verification.
-     */
-    if (!process_outputs(dc, &st)) return;
+    if(is_p2_new_sender(p2))
+    {
+        uint8_t hash[32];
+        {
+            output_hashes_t hashes;
+            if(!compute_op_sender_hashes(dc, &st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return;
+            if (!process_outputs(dc, &st, &hashes, hash)) return;
+        }
+    }
+    else
+    {
+        /** OUTPUTS VERIFICATION FLOW
+         *
+         *  For each output, check if it's a change address.
+         *  Show each output that is not a change address to the user for verification.
+         */
+        if (!process_outputs(dc, &st, 0, 0)) return;
 
-    /** TANSACTION CONFIRMATION
-     *
-     *  Show summary info to the user (transaction fees), ask for final confirmation
-     */
-    if (!confirm_transaction(dc, &st)) return;
+        /** TANSACTION CONFIRMATION
+         *
+         *  Show summary info to the user (transaction fees), ask for final confirmation
+         */
+        if (!confirm_transaction(dc, &st)) return;
 
-    /** SIGNING FLOW
-     *
-     * For each internal placeholder, and for each internal input, sign using the
-     * appropriate algorithm.
-     */
-    if (!sign_transaction(dc, &st, internal_inputs)) return;
+        /** SIGNING FLOW
+         *
+         * For each internal placeholder, and for each internal input, sign using the
+         * appropriate algorithm.
+         */
+        if (!sign_transaction(dc, &st, internal_inputs)) return;
 
-    // Only if called from swap, the app should terminate after sending the response
-    if (G_swap_state.called_from_swap) {
-        G_swap_state.should_exit = true;
+        // Only if called from swap, the app should terminate after sending the response
+        if (G_swap_state.called_from_swap) {
+            G_swap_state.should_exit = true;
+        }
     }
 
     SEND_SW(dc, SW_OK);
 }
 
-bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_t tx_version_len, uint8_t* sha_prevouts, uint8_t sha_prevouts_len, uint8_t* sha_sequences, uint8_t sha_sequences_len, uint8_t* sender_script, size_t sender_script_len, uint8_t* output_value, uint8_t output_value_len)
+bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_t* sha_prevouts, uint8_t* sha_sequences, uint8_t* sender_script, size_t sender_script_len, uint8_t* output_value)
 {
     cx_sha256_init(sighash_context);
 
     // Use cache data generated from Segwit
-    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", tx_version_len, tx_version);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", 4, tx_version);
     cx_hash(
         &sighash_context->header, 0,
         tx_version,
-        tx_version_len,
+        4,
         NULL, 0);
 
-    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_prevouts_len, sha_prevouts);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", 32, sha_prevouts);
     cx_hash(
         &sighash_context->header, 0,
         sha_prevouts,
-        sha_prevouts_len,
+        32,
         NULL, 0);
 
-    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_sequences_len, sha_sequences);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", 32, sha_sequences);
     cx_hash(
         &sighash_context->header, 0,
         sha_sequences,
-        sha_sequences_len,
+        32,
         NULL, 0);
 
     // Op sender specific data
@@ -2544,7 +2593,7 @@ bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_
     cx_hash(
         &sighash_context->header, 0,
         output_value,
-        output_value_len,
+        8,
         NULL, 0);
 
     uint8_t output_script_size[3];
@@ -2583,31 +2632,30 @@ bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_
         sizeof(script_code),
         NULL, 0);
 
-    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", output_value_len, output_value);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", 8, output_value);
     cx_hash(
         &sighash_context->header, 0,
         output_value,
-        output_value_len,
+        8,
         NULL, 0);
 
     return 1;
 }
 
-void hash_sender_finalize(cx_sha256_t* sighash_context, uint8_t* data_buffer, uint8_t data_buffer_len, uint8_t* sha_outputs, uint8_t sha_outputs_len)
+void hash_sender_finalize(cx_sha256_t* sighash_context, uint8_t* data_buffer, uint8_t* sha_outputs)
 {
-    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", sha_outputs_len, sha_outputs);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", 32, sha_outputs);
     cx_hash(
         &sighash_context->header, 0,
         sha_outputs,
-        sha_outputs_len,
+        32,
         NULL, 0);
-    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", data_buffer_len, data_buffer);
+    PRINTF("--- ADD TO HASH SENDER:\n%.*H\n", 8, data_buffer);
     cx_hash(&sighash_context->header, 0,
-        data_buffer, data_buffer_len, NULL, 0);
+        data_buffer, 8, NULL, 0);
 }
 
-static bool __attribute__((noinline))
-compute_op_sender_hashes(dispatcher_context_t *dc, sign_psbt_state_t *st, uint8_t* sha_prevouts, uint8_t* sha_sequences, uint8_t* sha_outputs) {
+bool compute_op_sender_hashes(dispatcher_context_t *dc, sign_psbt_state_t *st, uint8_t* sha_prevouts, uint8_t* sha_sequences, uint8_t* sha_outputs) {
     if(sha_prevouts && sha_sequences)
     {
         // compute sha_prevouts and sha_sequences
