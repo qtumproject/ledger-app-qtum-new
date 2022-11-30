@@ -51,8 +51,6 @@
 
 #include "../swap/swap_globals.h"
 
-#define P2_NEW_SENDER 0x81
-
 // common info that applies to either the current input or the current output
 typedef struct {
     merkleized_map_commitment_t map;
@@ -191,6 +189,11 @@ the right paths to identify internal inputs/outputs.
 */
 
 // HELPER FUNCTIONS
+bool is_p2_new_sender(uint8_t p2)
+{
+    return p2 == 0x81;
+}
+
 // Updates the hash_context with the output of given index
 // returns -1 on error. 0 on success.
 static int hash_output_n(dispatcher_context_t *dc,
@@ -1492,7 +1495,7 @@ confirm_transaction(dispatcher_context_t *dc, sign_psbt_state_t *st) {
         }
     } else {
         // Show final user validation UI
-        bool sign_sender = st->p2 == P2_NEW_SENDER;
+        bool sign_sender = is_p2_new_sender(st->p2);
         if (!ui_validate_transaction(dc, COIN_COINID_SHORT, fee, sign_sender)) {
             SEND_SW(dc, SW_DENY);
             return false;
