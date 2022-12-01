@@ -2483,6 +2483,17 @@ sign_transaction(dispatcher_context_t *dc,
     return true;
 }
 
+static bool __attribute__((noinline)) process_sender(dispatcher_context_t *dc, sign_psbt_state_t *st)
+{
+    uint8_t hash[32];
+    {
+        output_hashes_t hashes;
+        if (!compute_op_sender_hashes(dc, &st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return false;
+        if (!process_outputs(dc, &st, &hashes, hash)) return false;
+    }
+    return true;
+}
+
 void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
     LOG_PROCESSOR(__FILE__, __LINE__, __func__);
 
@@ -2522,14 +2533,9 @@ void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
      */
     if (!show_alerts(dc, &st, internal_inputs)) return;
 
-    if(is_p2_new_sender(p2))
+    if(is_p2_new_sender(st.p2))
     {
-        uint8_t hash[32];
-        {
-            output_hashes_t hashes;
-            if(!compute_op_sender_hashes(dc, &st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return;
-            if (!process_outputs(dc, &st, &hashes, hash)) return;
-        }
+        if (!process_sender(dc, &st)) return;
     }
     else
     {
