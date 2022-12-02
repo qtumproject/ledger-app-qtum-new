@@ -222,6 +222,19 @@ int format_opscript_script(const uint8_t script[],
     return out_ctr;
 }
 
+int format_opscript_script_short(const uint8_t script[],
+                           size_t script_len,
+                           char out[static MAX_OPRETURN_OUTPUT_DESC_SIZE_SHORT]) {
+    if (script_len == 0 || script[0] != OP_RETURN) {
+        return -1;
+    }
+
+    strcpy(out, "OP_RETURN");
+    int out_ctr = strlen(out);
+    out[out_ctr++] = '\0';
+    return out_ctr;
+}
+
 bool get_script_op(uint8_t ** pc, const uint8_t * end, uint8_t* opcodeRet, uint8_t **pvchRet, unsigned int *pvchSize)
 {
     *opcodeRet = OP_INVALIDOPCODE;

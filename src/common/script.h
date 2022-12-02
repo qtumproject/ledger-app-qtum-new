@@ -217,6 +217,7 @@ int get_script_address(const uint8_t script[], size_t script_len, char *out, siz
 
 // the longest OP_RETURN description "OP_RETURN 0x" followed by 160 hexadecimal characters
 #define MAX_OPRETURN_OUTPUT_DESC_SIZE (12 + 80 * 2 + 1)
+#define MAX_OPRETURN_OUTPUT_DESC_SIZE_SHORT (9 + 1)
 
 /**
  * Formats a valid OP_RETURN script for user verification. The resulting string is "OP_RETURN
@@ -239,6 +240,9 @@ int get_script_address(const uint8_t script[], size_t script_len, char *out, siz
 int format_opscript_script(const uint8_t script[],
                            size_t script_len,
                            char out[static MAX_OPRETURN_OUTPUT_DESC_SIZE]);
+int format_opscript_script_short(const uint8_t script[],
+                           size_t script_len,
+                           char out[static MAX_OPRETURN_OUTPUT_DESC_SIZE_SHORT]);
 
 bool get_script_size(uint8_t *buffer, size_t maxSize, unsigned int *scriptSize, unsigned int *discardSize);
 bool get_script_sender_address(uint8_t *buffer, size_t size, uint8_t *script);

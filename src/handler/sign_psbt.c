@@ -1404,7 +1404,7 @@ process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st, output_hashes_t
             ++st->external_outputs_count;
 
             // show this output's address
-            char output_address[MAX(MAX_ADDRESS_LENGTH_STR + 1, MAX_OPRETURN_OUTPUT_DESC_SIZE)];
+            char output_address[MAX(MAX_ADDRESS_LENGTH_STR + 1, MAX_OPRETURN_OUTPUT_DESC_SIZE_SHORT)];
             int address_len = get_script_address(output.in_out.scriptPubKey,
                                                  output.in_out.scriptPubKey_len,
                                                  output_address,
@@ -1412,7 +1412,7 @@ process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st, output_hashes_t
             if (address_len < 0) {
                 // script does not have an address; check if OP_RETURN
                 if (is_opreturn(output.in_out.scriptPubKey, output.in_out.scriptPubKey_len)) {
-                    int res = format_opscript_script(output.in_out.scriptPubKey,
+                    int res = format_opscript_script_short(output.in_out.scriptPubKey,
                                                      output.in_out.scriptPubKey_len,
                                                      output_address);
                     if (res == -1) {
@@ -2488,9 +2488,11 @@ static bool __attribute__((noinline)) process_sender(dispatcher_context_t *dc, s
     uint8_t hash[32];
     {
         output_hashes_t hashes;
-        if (!compute_op_sender_hashes(dc, &st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return false;
-        if (!process_outputs(dc, &st, &hashes, hash)) return false;
+        if (!compute_op_sender_hashes(dc, st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return false;
+        if (!process_outputs(dc, st, &hashes, hash)) return false;
     }
+    if (!confirm_transaction(dc, st)) return false;
+
     return true;
 }
 

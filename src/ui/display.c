@@ -67,7 +67,7 @@ typedef struct {
 
 typedef struct {
     char index[sizeof("output #999")];
-    char address_or_description[MAX(MAX_ADDRESS_LENGTH_STR + 1, MAX_OPRETURN_OUTPUT_DESC_SIZE)];
+    char address_or_description[MAX(MAX_ADDRESS_LENGTH_STR + 1, MAX_OPRETURN_OUTPUT_DESC_SIZE_SHORT)];
     char amount[MAX_AMOUNT_LENGTH + 1];
 } ui_validate_output_state_t;
 
