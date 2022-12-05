@@ -23,6 +23,7 @@
 #include "../crypto.h"
 
 #include "handlers.h"
+#include "bip32_path.h"
 
 void handler_get_master_fingerprint(dispatcher_context_t *dc, uint8_t p2) {
     (void) p2;
@@ -34,7 +35,19 @@ void handler_get_master_fingerprint(dispatcher_context_t *dc, uint8_t p2) {
     }
 
     uint8_t master_pubkey[33];
-    if (!crypto_get_compressed_pubkey_at_path((uint32_t[]){}, 0, master_pubkey, NULL)) {
+    bip32_path_t path;
+    if (BIP32_PUBKEY_VERSION == BIP32_PUBKEY_VERSION_MAINNET) {  // mainnet
+        // Mainnet fingerprint bip32 path m/44'/88' in HWI
+        path.path[0] = 0x8000002c;
+        path.path[1] = 0x80000058;
+        path.length = 2;
+    } else if (BIP32_PUBKEY_VERSION == BIP32_PUBKEY_VERSION_TESTNET) {  // testnet
+        // Testnet fingerprint bip32 path m/0'/45342' in HWI
+        path.path[0] = 0x80000000;
+        path.path[1] = 0x8000b11e;
+        path.length = 2;
+    }
+    if (!crypto_get_compressed_pubkey_at_path(path.path, path.length, master_pubkey, NULL)) {
         SEND_SW(dc, SW_BAD_STATE);  // should never happen
         return;
     }

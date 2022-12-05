@@ -56,9 +56,6 @@ UX_FLOW(ux_menu_main_flow_bitcoin_testnet,
         &ux_menu_exit_step,
         FLOW_LOOP);
 
-#define BIP32_PUBKEY_VERSION_MAINNET 0x0488B21E
-#define BIP32_PUBKEY_VERSION_TESTNET 0x043587CF
-
 void ui_menu_main() {
     if (G_ux.stack_count == 0) {
         ux_stack_push();
