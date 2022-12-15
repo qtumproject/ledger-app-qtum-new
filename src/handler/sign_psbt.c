@@ -199,10 +199,6 @@ bool hash_sender_start(cx_sha256_t* sighash_context, uint8_t* tx_version, uint8_
 void hash_sender_finalize(cx_sha256_t* sighash_context, uint8_t* data_buffer, uint8_t* sha_outputs);
 
 // HELPER FUNCTIONS
-bool is_p2_new_sender(uint8_t p2)
-{
-    return p2 == 0x81;
-}
 
 // Updates the hash_context with the output of given index
 // returns -1 on error. 0 on success.
@@ -1489,7 +1485,7 @@ process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st, output_hashes_t
 }
 
 static bool __attribute__((noinline))
-confirm_transaction(dispatcher_context_t *dc, sign_psbt_state_t *st) {
+confirm_transaction(dispatcher_context_t *dc, sign_psbt_state_t *st, bool sign_sender) {
     LOG_PROCESSOR(__FILE__, __LINE__, __func__);
 
     if (st->inputs_total_value < st->outputs_total_value) {
@@ -1532,7 +1528,6 @@ confirm_transaction(dispatcher_context_t *dc, sign_psbt_state_t *st) {
         }
     } else {
         // Show final user validation UI
-        bool sign_sender = is_p2_new_sender(st->p2);
         if (!ui_validate_transaction(dc, COIN_COINID_SHORT, fee, sign_sender)) {
             SEND_SW(dc, SW_DENY);
             return false;
@@ -2491,7 +2486,7 @@ static bool __attribute__((noinline)) process_sender(dispatcher_context_t *dc, s
         if (!compute_op_sender_hashes(dc, st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return false;
         if (!process_outputs(dc, st, &hashes, hash)) return false;
     }
-    if (!confirm_transaction(dc, st)) return false;
+    if (!confirm_transaction(dc, st, true)) return false;
 
     return true;
 }
@@ -2535,36 +2530,29 @@ void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
      */
     if (!show_alerts(dc, &st, internal_inputs)) return;
 
-    if(is_p2_new_sender(st.p2))
-    {
-        if (!process_sender(dc, &st)) return;
-    }
-    else
-    {
-        /** OUTPUTS VERIFICATION FLOW
-         *
-         *  For each output, check if it's a change address.
-         *  Show each output that is not a change address to the user for verification.
-         */
-        if (!process_outputs(dc, &st, 0, 0)) return;
+    /** OUTPUTS VERIFICATION FLOW
+     *
+     *  For each output, check if it's a change address.
+     *  Show each output that is not a change address to the user for verification.
+     */
+    if (!process_outputs(dc, &st, 0, 0)) return;
 
-        /** TANSACTION CONFIRMATION
-         *
-         *  Show summary info to the user (transaction fees), ask for final confirmation
-         */
-        if (!confirm_transaction(dc, &st)) return;
+    /** TANSACTION CONFIRMATION
+     *
+     *  Show summary info to the user (transaction fees), ask for final confirmation
+     */
+    if (!confirm_transaction(dc, &st, false)) return;
 
-        /** SIGNING FLOW
-         *
-         * For each internal placeholder, and for each internal input, sign using the
-         * appropriate algorithm.
-         */
-        if (!sign_transaction(dc, &st, internal_inputs)) return;
+    /** SIGNING FLOW
+     *
+     * For each internal placeholder, and for each internal input, sign using the
+     * appropriate algorithm.
+     */
+    if (!sign_transaction(dc, &st, internal_inputs)) return;
 
-        // Only if called from swap, the app should terminate after sending the response
-        if (G_swap_state.called_from_swap) {
-            G_swap_state.should_exit = true;
-        }
+    // Only if called from swap, the app should terminate after sending the response
+    if (G_swap_state.called_from_swap) {
+        G_swap_state.should_exit = true;
     }
 
     SEND_SW(dc, SW_OK);
@@ -2743,4 +2731,36 @@ bool compute_op_sender_hashes(dispatcher_context_t *dc, sign_psbt_state_t *st, u
     }
 
     return true;
+}
+
+void handler_sign_sender_psbt(dispatcher_context_t *dc, uint8_t p2) {
+    LOG_PROCESSOR(__FILE__, __LINE__, __func__);
+
+    sign_psbt_state_t st;
+    memset(&st, 0, sizeof(st));
+
+    // Device must be unlocked
+    if (os_global_pin_is_validated() != BOLOS_UX_OK) {
+        SEND_SW(dc, SW_SECURITY_STATUS_NOT_SATISFIED);
+        return;
+    }
+
+    st.p2 = p2;
+
+    // Read APDU inputs, intialize global state and read global PSBT map
+    if (!init_global_state(dc, &st)) return;
+
+    // Bitmap to keep track of which inputs are internal
+    uint8_t internal_inputs[BITVECTOR_REAL_SIZE(MAX_N_INPUTS_CAN_SIGN)];
+
+    // Inputs verification flow
+    if (!preprocess_inputs(dc, &st, internal_inputs)) return;
+
+    // Inputs verification alert
+    if (!show_alerts(dc, &st, internal_inputs)) return;
+
+    // Process sender outputs
+    if (!process_sender(dc, &st)) return;
+
+    SEND_SW(dc, SW_OK);
 }
