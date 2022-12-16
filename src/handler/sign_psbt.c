@@ -1316,7 +1316,7 @@ static void output_keys_callback(dispatcher_context_t *dc,
 }
 
 static bool __attribute__((noinline))
-process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st, output_hashes_t *hashes, uint8_t* hash) {
+process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st, output_hashes_t *hashes, uint8_t* hash, int* output_index) {
     /** OUTPUTS VERIFICATION FLOW
      *
      *  For each output, check if it's a change address.
@@ -1478,6 +1478,7 @@ process_outputs(dispatcher_context_t *dc, sign_psbt_state_t *st, output_hashes_t
 
             // Rehash
             cx_hash_sha256(hash, 32, hash, 32);
+            *output_index = cur_output_index;
         }
     }
 
@@ -2478,15 +2479,56 @@ sign_transaction(dispatcher_context_t *dc,
     return true;
 }
 
-static bool __attribute__((noinline)) process_sender(dispatcher_context_t *dc, sign_psbt_state_t *st)
+static bool __attribute__((noinline)) sign_transaction_output(dispatcher_context_t *dc,
+                                                             sign_psbt_state_t *st,
+                                                             uint32_t *sign_path,
+                                                             uint8_t sign_path_len,
+                                                             uint8_t* sighash,
+                                                             unsigned int output_index) {
+    LOG_PROCESSOR(__FILE__, __LINE__, __func__);
+
+    uint8_t sig[MAX_DER_SIG_LEN + 1];  // extra byte for the appended sighash-type
+
+    uint8_t pubkey[33];
+
+    int sig_len = crypto_ecdsa_sign_sha256_hash_with_key(sign_path,
+                                                         sign_path_len,
+                                                         sighash,
+                                                         pubkey,
+                                                         sig,
+                                                         NULL);
+    if (sig_len < 0) {
+        // unexpected error when signing
+        SEND_SW(dc, SW_BAD_STATE);
+        return false;
+    }
+
+    // append the sighash type byte
+    uint8_t sighash_byte = 0x01;
+    sig[sig_len++] = sighash_byte;
+
+    if (!yield_signature(dc, st, output_index, pubkey, 33, sig, sig_len)) return false;
+
+    return true;
+}
+
+static bool __attribute__((noinline)) process_sender(dispatcher_context_t *dc, sign_psbt_state_t *st, uint32_t *bip32_path, uint8_t bip32_path_len)
 {
+    LOG_PROCESSOR(__FILE__, __LINE__, __func__);
+
     uint8_t hash[32];
+    int output_index = -1;
     {
         output_hashes_t hashes;
         if (!compute_op_sender_hashes(dc, st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return false;
-        if (!process_outputs(dc, st, &hashes, hash)) return false;
+        if (!process_outputs(dc, st, &hashes, hash, &output_index)) return false;
+    }
+    if (output_index == -1) {
+        SEND_SW(dc, SW_SIGNATURE_FAIL);
+        return false;
     }
     if (!confirm_transaction(dc, st, true)) return false;
+    if (!sign_transaction_output(dc, st, bip32_path, bip32_path_len, hash, output_index)) return false;
 
     return true;
 }
@@ -2535,7 +2577,7 @@ void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
      *  For each output, check if it's a change address.
      *  Show each output that is not a change address to the user for verification.
      */
-    if (!process_outputs(dc, &st, 0, 0)) return;
+    if (!process_outputs(dc, &st, 0, 0, 0)) return;
 
     /** TANSACTION CONFIRMATION
      *
@@ -2736,6 +2778,8 @@ bool compute_op_sender_hashes(dispatcher_context_t *dc, sign_psbt_state_t *st, u
 void handler_sign_sender_psbt(dispatcher_context_t *dc, uint8_t p2) {
     LOG_PROCESSOR(__FILE__, __LINE__, __func__);
 
+    uint8_t bip32_path_len;
+    uint32_t bip32_path[MAX_BIP32_PATH_STEPS];
     sign_psbt_state_t st;
     memset(&st, 0, sizeof(st));
 
@@ -2746,6 +2790,17 @@ void handler_sign_sender_psbt(dispatcher_context_t *dc, uint8_t p2) {
     }
 
     st.p2 = p2;
+
+    if (!buffer_read_u8(&dc->read_buffer, &bip32_path_len) ||
+        !buffer_read_bip32_path(&dc->read_buffer, bip32_path, bip32_path_len)) {
+        SEND_SW(dc, SW_WRONG_DATA_LENGTH);
+        return;
+    }
+
+    if (bip32_path_len > MAX_BIP32_PATH_STEPS) {
+        SEND_SW(dc, SW_INCORRECT_DATA);
+        return;
+    }
 
     // Read APDU inputs, intialize global state and read global PSBT map
     if (!init_global_state(dc, &st)) return;
@@ -2760,7 +2815,7 @@ void handler_sign_sender_psbt(dispatcher_context_t *dc, uint8_t p2) {
     if (!show_alerts(dc, &st, internal_inputs)) return;
 
     // Process sender outputs
-    if (!process_sender(dc, &st)) return;
+    if (!process_sender(dc, &st, bip32_path, bip32_path_len)) return;
 
     SEND_SW(dc, SW_OK);
 }
