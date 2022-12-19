@@ -2512,27 +2512,6 @@ static bool __attribute__((noinline)) sign_transaction_output(dispatcher_context
     return true;
 }
 
-static bool __attribute__((noinline)) process_sender(dispatcher_context_t *dc, sign_psbt_state_t *st, uint32_t *bip32_path, uint8_t bip32_path_len)
-{
-    LOG_PROCESSOR(__FILE__, __LINE__, __func__);
-
-    uint8_t hash[32];
-    int output_index = -1;
-    {
-        output_hashes_t hashes;
-        if (!compute_op_sender_hashes(dc, st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return false;
-        if (!process_outputs(dc, st, &hashes, hash, &output_index)) return false;
-    }
-    if (output_index == -1) {
-        SEND_SW(dc, SW_SIGNATURE_FAIL);
-        return false;
-    }
-    if (!confirm_transaction(dc, st, true)) return false;
-    if (!sign_transaction_output(dc, st, bip32_path, bip32_path_len, hash, output_index)) return false;
-
-    return true;
-}
-
 void handler_sign_psbt(dispatcher_context_t *dc, uint8_t p2) {
     LOG_PROCESSOR(__FILE__, __LINE__, __func__);
 
@@ -2778,7 +2757,7 @@ bool compute_op_sender_hashes(dispatcher_context_t *dc, sign_psbt_state_t *st, u
 void handler_sign_sender_psbt(dispatcher_context_t *dc, uint8_t p2) {
     LOG_PROCESSOR(__FILE__, __LINE__, __func__);
 
-    uint8_t bip32_path_len;
+    uint8_t bip32_path_len = 0;
     uint32_t bip32_path[MAX_BIP32_PATH_STEPS];
     sign_psbt_state_t st;
     memset(&st, 0, sizeof(st));
@@ -2805,17 +2784,33 @@ void handler_sign_sender_psbt(dispatcher_context_t *dc, uint8_t p2) {
     // Read APDU inputs, intialize global state and read global PSBT map
     if (!init_global_state(dc, &st)) return;
 
-    // Bitmap to keep track of which inputs are internal
-    uint8_t internal_inputs[BITVECTOR_REAL_SIZE(MAX_N_INPUTS_CAN_SIGN)];
+    {
+        // Bitmap to keep track of which inputs are internal
+        uint8_t internal_inputs[BITVECTOR_REAL_SIZE(MAX_N_INPUTS_CAN_SIGN)];
 
-    // Inputs verification flow
-    if (!preprocess_inputs(dc, &st, internal_inputs)) return;
+        // Inputs verification flow
+        if (!preprocess_inputs(dc, &st, internal_inputs)) return;
 
-    // Inputs verification alert
-    if (!show_alerts(dc, &st, internal_inputs)) return;
+        // Inputs verification alert
+        if (!show_alerts(dc, &st, internal_inputs)) return;
+    }
 
     // Process sender outputs
-    if (!process_sender(dc, &st, bip32_path, bip32_path_len)) return;
+    {
+        uint8_t hash[32];
+        int output_index = -1;
+        {
+            output_hashes_t hashes;
+            if (!compute_op_sender_hashes(dc, &st, hashes.sha_prevouts, hashes.sha_sequences, hashes.sha_outputs)) return;
+            if (!process_outputs(dc, &st, &hashes, hash, &output_index)) return;
+        }
+        if (output_index == -1) {
+            SEND_SW(dc, SW_SIGNATURE_FAIL);
+            return;
+        }
+        if (!confirm_transaction(dc, &st, true)) return;
+        if (!sign_transaction_output(dc, &st, bip32_path, bip32_path_len, hash, output_index)) return;
+    }
 
     SEND_SW(dc, SW_OK);
 }
